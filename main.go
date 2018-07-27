@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -21,6 +22,7 @@ import (
 // https://github.com/prometheus/node_exporter/blob/master/node_exporter.go
 
 var topicLastHandled = map[string]time.Time{}
+var topicLastHandledMutex = new(sync.Mutex)
 
 var namespace = "mqtt"
 
@@ -49,7 +51,7 @@ func main() {
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	log.Infoln("Starting node_exporter", version.Info())
+	log.Infoln("Starting mqtt_topic_exporter", version.Info())
 	log.Infoln("Build context", version.BuildContext())
 
 	// parse retain time
@@ -70,7 +72,7 @@ func main() {
 	username := mqttServerUri.User.Username()
 	password, _ := mqttServerUri.User.Password()
 
-	log.Infof("Connecting %s with topic %s", mqttServerStr, mqttTopic)
+	log.Infof("Connecting %s with topic %s", *mqttServerStr, *mqttTopic)
 
 	cli := client.New(&client.Options{
 		ErrorHandler: func(err error) {
@@ -100,7 +102,9 @@ func main() {
 				Handler: func(topicName, message []byte) {
 					// mqtt_topic{topic="/foo/bar"} value
 					topic := string(topicName)
+					topicLastHandledMutex.Lock()
 					topicLastHandled[topic] = time.Now()
+					topicLastHandledMutex.Unlock()
 					value, _ := strconv.ParseFloat(string(message), 64)
 					mqttGauge.WithLabelValues(topic).Set(value)
 					log.Infof("MQTT TOPIC %s => %f", topic, value)
@@ -115,15 +119,17 @@ func main() {
 	go func() {
 		// Cleanup
 		for {
-			time.Sleep(retainTime)
+			time.Sleep(10)
 			now := time.Now()
+			topicLastHandledMutex.Lock()
 			for topic, last := range topicLastHandled {
 				duration := now.Sub(last)
-				if duration > time.Minute {
+				if duration > retainTime {
 					mqttGauge.DeleteLabelValues(topic)
 					log.Infof("Deleted old topic %s", topic)
 				}
 			}
+			topicLastHandledMutex.Unlock()
 		}
 	}()
 
