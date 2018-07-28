@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +43,7 @@ func main() {
 		listenAddress = kingpin.Flag("web.listen-address", "Address on which to expose metrics and web interface.").Default(":9981").String()
 		metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		retainTimeStr = kingpin.Flag("mqtt.retain-time", "Retain duration for a topic").Default("1m").String()
-		mqttServerStr = kingpin.Flag("mqtt.server", "MQTT Server address URI mqtts://user:pass@host:port").Required().String()
+		mqttServerUri = kingpin.Flag("mqtt.server", "MQTT Server address URI mqtts://user:pass@host:port").Required().URL()
 		mqttTopics    = kingpin.Flag("mqtt.topic", "Watch MQTT topic").Required().Strings()
 	)
 	log.AddFlags(kingpin.CommandLine)
@@ -62,18 +61,14 @@ func main() {
 	}
 
 	// parse uri
-	mqttServerUri, err := url.Parse(*mqttServerStr)
-	if err != nil {
-		log.Fatal(err)
-	}
 	var tlsConfig *tls.Config
-	if mqttServerUri.Scheme == "mqtts" {
+	if (*mqttServerUri).Scheme == "mqtts" {
 		tlsConfig = &tls.Config{}
 	}
-	username := mqttServerUri.User.Username()
-	password, _ := mqttServerUri.User.Password()
+	username := (*mqttServerUri).User.Username()
+	password, _ := (*mqttServerUri).User.Password()
 
-	log.Infof("Connecting %s with topic %s", *mqttServerStr, strings.Join(*mqttTopics, " "))
+	log.Infof("Connecting %s with topic %s", (*mqttServerUri).String(), strings.Join(*mqttTopics, " "))
 
 	cli := client.New(&client.Options{
 		ErrorHandler: func(err error) {
@@ -85,7 +80,7 @@ func main() {
 	err = cli.Connect(&client.ConnectOptions{
 		Network:   "tcp",
 		TLSConfig: tlsConfig,
-		Address:   mqttServerUri.Host,
+		Address:   (*mqttServerUri).Host,
 		UserName:  []byte(username),
 		Password:  []byte(password),
 		ClientID:  []byte("client_id"),
