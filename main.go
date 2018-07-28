@@ -68,52 +68,66 @@ func main() {
 	username := (*mqttServerUri).User.Username()
 	password, _ := (*mqttServerUri).User.Password()
 
-	log.Infof("Connecting %s with topic %s", (*mqttServerUri).String(), strings.Join(*mqttTopics, " "))
+	go func() {
+		for {
+			log.Infof("Connecting %s with topic %s", (*mqttServerUri).String(), strings.Join(*mqttTopics, " "))
 
-	cli := client.New(&client.Options{
-		ErrorHandler: func(err error) {
-			fmt.Println(err)
-		},
-	})
-	defer cli.Terminate()
+			errChan := make(chan error)
+			defer close(errChan)
 
-	err = cli.Connect(&client.ConnectOptions{
-		Network:   "tcp",
-		TLSConfig: tlsConfig,
-		Address:   (*mqttServerUri).Host,
-		UserName:  []byte(username),
-		Password:  []byte(password),
-		ClientID:  []byte("client_id"),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Subscribe to topics.
-	for _, mqttTopic := range *mqttTopics {
-		log.Infof("Subscribe topic %s", mqttTopic)
-		err := cli.Subscribe(&client.SubscribeOptions{
-			SubReqs: []*client.SubReq{
-				&client.SubReq{
-					TopicFilter: []byte(mqttTopic),
-					QoS:         mqtt.QoS0,
-					Handler: func(topicName, message []byte) {
-						// mqtt_topic{topic="/foo/bar"} value
-						topic := string(topicName)
-						topicLastHandledMutex.Lock()
-						topicLastHandled[topic] = time.Now()
-						topicLastHandledMutex.Unlock()
-						value, _ := strconv.ParseFloat(string(message), 64)
-						mqttGauge.WithLabelValues(topic).Set(value)
-						log.Infof("MQTT TOPIC %s => %f", topic, value)
-					},
+			cli := client.New(&client.Options{
+				ErrorHandler: func(err error) {
+					errChan <- err
 				},
-			},
-		})
-		if err != nil {
-			log.Fatal(err)
+			})
+			defer cli.Terminate()
+
+			err = cli.Connect(&client.ConnectOptions{
+				Network:   "tcp",
+				TLSConfig: tlsConfig,
+				Address:   (*mqttServerUri).Host,
+				UserName:  []byte(username),
+				Password:  []byte(password),
+				ClientID:  []byte("client_id"),
+			})
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			// Subscribe to topics.
+			for _, mqttTopic := range *mqttTopics {
+				log.Infof("Subscribe topic %s", mqttTopic)
+				err := cli.Subscribe(&client.SubscribeOptions{
+					SubReqs: []*client.SubReq{
+						&client.SubReq{
+							TopicFilter: []byte(mqttTopic),
+							QoS:         mqtt.QoS0,
+							Handler: func(topicName, message []byte) {
+								// mqtt_topic{topic="/foo/bar"} value
+								topic := string(topicName)
+								topicLastHandledMutex.Lock()
+								topicLastHandled[topic] = time.Now()
+								topicLastHandledMutex.Unlock()
+								value, _ := strconv.ParseFloat(string(message), 64)
+								mqttGauge.WithLabelValues(topic).Set(value)
+								log.Infof("MQTT TOPIC %s => %f", topic, value)
+							},
+						},
+					},
+				})
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+
+			disconnected := <-errChan
+			log.Infof("MQTT Client disconnected %v", disconnected)
+
+			cli.Terminate()
+
+			time.Sleep(1)
 		}
-	}
+	}()
 
 	go func() {
 		// Cleanup
@@ -145,10 +159,6 @@ func main() {
 	log.Infoln("Listening on", *listenAddress)
 	err = http.ListenAndServe(*listenAddress, nil)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := cli.Disconnect(); err != nil {
 		log.Fatal(err)
 	}
 }
