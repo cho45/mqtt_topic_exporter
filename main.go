@@ -130,6 +130,7 @@ func main() {
 				duration := now.Sub(last)
 				if duration > retainTime {
 					mqttGauge.DeleteLabelValues(topic)
+					delete(topicLastHandled, topic)
 					log.Infof("Deleted old topic %s", topic)
 				}
 			}
