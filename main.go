@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,7 +45,7 @@ func main() {
 		metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		retainTimeStr = kingpin.Flag("mqtt.retain-time", "Retain duration for a topic").Default("1m").String()
 		mqttServerStr = kingpin.Flag("mqtt.server", "MQTT Server address URI mqtts://user:pass@host:port").Required().String()
-		mqttTopic     = kingpin.Flag("mqtt.topic", "Watch MQTT topic").Required().String()
+		mqttTopics    = kingpin.Flag("mqtt.topic", "Watch MQTT topic").Required().Strings()
 	)
 	log.AddFlags(kingpin.CommandLine)
 	kingpin.Version(version.Print("mqtt_exporter"))
@@ -72,7 +73,7 @@ func main() {
 	username := mqttServerUri.User.Username()
 	password, _ := mqttServerUri.User.Password()
 
-	log.Infof("Connecting %s with topic %s", *mqttServerStr, *mqttTopic)
+	log.Infof("Connecting %s with topic %s", *mqttServerStr, strings.Join(*mqttTopics, " "))
 
 	cli := client.New(&client.Options{
 		ErrorHandler: func(err error) {
@@ -94,26 +95,29 @@ func main() {
 	}
 
 	// Subscribe to topics.
-	err = cli.Subscribe(&client.SubscribeOptions{
-		SubReqs: []*client.SubReq{
-			&client.SubReq{
-				TopicFilter: []byte(*mqttTopic),
-				QoS:         mqtt.QoS0,
-				Handler: func(topicName, message []byte) {
-					// mqtt_topic{topic="/foo/bar"} value
-					topic := string(topicName)
-					topicLastHandledMutex.Lock()
-					topicLastHandled[topic] = time.Now()
-					topicLastHandledMutex.Unlock()
-					value, _ := strconv.ParseFloat(string(message), 64)
-					mqttGauge.WithLabelValues(topic).Set(value)
-					log.Infof("MQTT TOPIC %s => %f", topic, value)
+	for _, mqttTopic := range *mqttTopics {
+		log.Infof("Subscribe topic %s", mqttTopic)
+		err := cli.Subscribe(&client.SubscribeOptions{
+			SubReqs: []*client.SubReq{
+				&client.SubReq{
+					TopicFilter: []byte(mqttTopic),
+					QoS:         mqtt.QoS0,
+					Handler: func(topicName, message []byte) {
+						// mqtt_topic{topic="/foo/bar"} value
+						topic := string(topicName)
+						topicLastHandledMutex.Lock()
+						topicLastHandled[topic] = time.Now()
+						topicLastHandledMutex.Unlock()
+						value, _ := strconv.ParseFloat(string(message), 64)
+						mqttGauge.WithLabelValues(topic).Set(value)
+						log.Infof("MQTT TOPIC %s => %f", topic, value)
+					},
 				},
 			},
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	go func() {
