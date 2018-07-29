@@ -68,6 +68,8 @@ func main() {
 	username := (*mqttServerUri).User.Username()
 	password, _ := (*mqttServerUri).User.Password()
 
+	log.Infof("value ratain: %d", retainTime)
+
 	go func() {
 		for {
 			log.Infof("Connecting %s with topic %s", (*mqttServerUri).String(), strings.Join(*mqttTopics, " "))
@@ -125,14 +127,14 @@ func main() {
 
 			cli.Terminate()
 
-			time.Sleep(1)
+			time.Sleep(1 * time.Second)
 		}
 	}()
 
 	go func() {
 		// Cleanup
 		for {
-			time.Sleep(10)
+			time.Sleep(10 * time.Second)
 			now := time.Now()
 			topicLastHandledMutex.Lock()
 			for topic, last := range topicLastHandled {
