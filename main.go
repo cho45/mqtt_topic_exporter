@@ -51,6 +51,7 @@ func main() {
 		retainTimeStr = flag.String("mqtt.retain-time", "1m", "Retain duration for a topic")
 		mqttServerUri = flag.String("mqtt.server", "", "MQTT Server address URI mqtts://user:pass@host:port")
 		mqttTopics    = flag.String("mqtt.topic", "", "Comma separated MQTT topics to watch")
+		maxBackoffSec = flag.Int("mqtt.max-backoff", 60, "Maximum backoff duration for MQTT reconnect attempts (seconds)")
 	)
 	flag.Parse()
 
@@ -97,18 +98,28 @@ func main() {
 			})
 			defer cli.Terminate()
 
-			err = cli.Connect(&client.ConnectOptions{
-				Network:   "tcp",
-				TLSConfig: tlsConfig,
-				Address:   uri.Host,
-				UserName:  []byte(username),
-				Password:  []byte(password),
-				ClientID:  []byte("client_id"),
-			})
-			if err != nil {
-				log.Printf("Failed to connect to MQTT broker: %v. Retrying in 3 seconds...", err)
-				time.Sleep(3 * time.Second)
-				continue
+			backoff := 1 * time.Second
+			maxBackoff := time.Duration(*maxBackoffSec) * time.Second
+
+			for {
+				err = cli.Connect(&client.ConnectOptions{
+					Network:   "tcp",
+					TLSConfig: tlsConfig,
+					Address:   uri.Host,
+					UserName:  []byte(username),
+					Password:  []byte(password),
+					ClientID:  []byte("client_id"),
+				})
+				if err != nil {
+					log.Printf("Failed to connect to MQTT broker: %v. Retrying in %v...", err, backoff)
+					time.Sleep(backoff)
+					backoff *= 2
+					if backoff > maxBackoff {
+						backoff = maxBackoff
+					}
+					continue
+				}
+				break // 成功したら抜ける
 			}
 
 			// Subscribe to topics.
@@ -147,6 +158,9 @@ func main() {
 			log.Printf("MQTT Client disconnected %v", disconnected)
 
 			cli.Terminate()
+
+			// 再接続時は指数バックオフをリセット
+			backoff = 1 * time.Second
 
 			time.Sleep(1 * time.Second)
 		}
