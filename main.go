@@ -63,6 +63,14 @@ func main() {
 
 	log.Printf("Starting mqtt_topic_exporter version=%s", Version)
 	log.Printf("Build context")
+	log.Printf("--- Configuration ---")
+	log.Printf("Listen address: %s", *listenAddress)
+	log.Printf("Metrics path: %s", *metricsPath)
+	log.Printf("MQTT server URI: %s", *mqttServerUri)
+	log.Printf("MQTT topics: %s", strings.Join(topics, ", "))
+	log.Printf("Retain time: %s", *retainTimeStr)
+	log.Printf("Max reconnect backoff: %d seconds", *maxBackoffSec)
+	log.Printf("----------------------")
 
 	// parse retain time
 	retainTime, err := time.ParseDuration(*retainTimeStr)
