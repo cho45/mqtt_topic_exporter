@@ -85,15 +85,15 @@ curl -s http://localhost:9981/metrics | grep mqtt
 
 ---
 
-## Testing MQTT Publish (pubtest.go)
+## Testing MQTT Publish (pubtest)
 
-A sample Go program `pubtest.go` is included for publishing test messages to the MQTT broker.
+A sample Go program is included at `cmd/pubtest/main.go` for publishing test messages to the MQTT broker.
 
 ### Usage
 
 Run the publisher directly with `go run`:
 ```sh
- go run pubtest.go --topic /test/topic --value 42.5
+ go run cmd/pubtest/main.go /test/topic 42.5
 ```
 
 This will publish a test message to the MQTT broker at `mqtt://mosquitto:1883`.
