@@ -1,22 +1,24 @@
-//#!/usr/bin/env go run
+// #!/usr/bin/env go run
 package main
 
 import (
 	"crypto/tls"
+	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"log"
+
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/log"
-	"github.com/prometheus/common/version"
 	"github.com/yosssi/gmq/mqtt"
 	"github.com/yosssi/gmq/mqtt/client"
-	"gopkg.in/alecthomas/kingpin.v2"
 )
 
 // https://github.com/prometheus/node_exporter/blob/master/node_exporter.go
@@ -38,41 +40,52 @@ func init() {
 	prometheus.MustRegister(mqttGauge)
 }
 
+var (
+	Version = "dev"
+)
+
 func main() {
 	var (
-		listenAddress = kingpin.Flag("web.listen-address", "Address on which to expose metrics and web interface.").Default(":9981").String()
-		metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
-		retainTimeStr = kingpin.Flag("mqtt.retain-time", "Retain duration for a topic").Default("1m").String()
-		mqttServerUri = kingpin.Flag("mqtt.server", "MQTT Server address URI mqtts://user:pass@host:port").Required().URL()
-		mqttTopics    = kingpin.Flag("mqtt.topic", "Watch MQTT topic").Required().Strings()
+		listenAddress = flag.String("web.listen-address", ":9981", "Address on which to expose metrics and web interface.")
+		metricsPath   = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+		retainTimeStr = flag.String("mqtt.retain-time", "1m", "Retain duration for a topic")
+		mqttServerUri = flag.String("mqtt.server", "", "MQTT Server address URI mqtts://user:pass@host:port")
+		mqttTopics    = flag.String("mqtt.topic", "", "Comma separated MQTT topics to watch")
 	)
-	log.AddFlags(kingpin.CommandLine)
-	kingpin.Version(version.Print("mqtt_exporter"))
-	kingpin.HelpFlag.Short('h')
-	kingpin.Parse()
+	flag.Parse()
 
-	log.Infoln("Starting mqtt_topic_exporter", version.Info())
-	log.Infoln("Build context", version.BuildContext())
+	if *mqttServerUri == "" || *mqttTopics == "" {
+		log.Fatal("--mqtt.server and --mqtt.topic are required")
+	}
+
+	topics := strings.Split(*mqttTopics, ",")
+
+	log.Printf("Starting mqtt_topic_exporter version=%s", Version)
+	log.Printf("Build context")
 
 	// parse retain time
 	retainTime, err := time.ParseDuration(*retainTimeStr)
 	if err != nil {
-		log.Fatalf("specified %s is invalid", retainTimeStr)
+		log.Fatalf("specified %s is invalid", *retainTimeStr)
 	}
 
 	// parse uri
 	var tlsConfig *tls.Config
-	if (*mqttServerUri).Scheme == "mqtts" {
+	uri, err := parseMQTTUri(*mqttServerUri)
+	if err != nil {
+		log.Fatalf("invalid mqtt.server uri: %v", err)
+	}
+	if uri.Scheme == "mqtts" {
 		tlsConfig = &tls.Config{}
 	}
-	username := (*mqttServerUri).User.Username()
-	password, _ := (*mqttServerUri).User.Password()
+	username := uri.User.Username()
+	password, _ := uri.User.Password()
 
-	log.Infof("value ratain: %d", retainTime)
+	log.Printf("value ratain: %d", retainTime)
 
 	go func() {
 		for {
-			log.Infof("Connecting %s with topic %s", (*mqttServerUri).String(), strings.Join(*mqttTopics, " "))
+			log.Printf("Connecting %s with topic %s", uri.String(), strings.Join(topics, " "))
 
 			errChan := make(chan error)
 			defer close(errChan)
@@ -87,7 +100,7 @@ func main() {
 			err = cli.Connect(&client.ConnectOptions{
 				Network:   "tcp",
 				TLSConfig: tlsConfig,
-				Address:   (*mqttServerUri).Host,
+				Address:   uri.Host,
 				UserName:  []byte(username),
 				Password:  []byte(password),
 				ClientID:  []byte("client_id"),
@@ -97,8 +110,8 @@ func main() {
 			}
 
 			// Subscribe to topics.
-			for _, mqttTopic := range *mqttTopics {
-				log.Infof("Subscribe topic %s", mqttTopic)
+			for _, mqttTopic := range topics {
+				log.Printf("Subscribe topic %s", mqttTopic)
 				err := cli.Subscribe(&client.SubscribeOptions{
 					SubReqs: []*client.SubReq{
 						&client.SubReq{
@@ -112,7 +125,7 @@ func main() {
 								topicLastHandledMutex.Unlock()
 								value, _ := strconv.ParseFloat(string(message), 64)
 								mqttGauge.WithLabelValues(topic).Set(value)
-								log.Infof("MQTT TOPIC %s => %f", topic, value)
+								log.Printf("MQTT TOPIC %s => %f", topic, value)
 							},
 						},
 					},
@@ -123,7 +136,7 @@ func main() {
 			}
 
 			disconnected := <-errChan
-			log.Infof("MQTT Client disconnected %v", disconnected)
+			log.Printf("MQTT Client disconnected %v", disconnected)
 
 			cli.Terminate()
 
@@ -142,7 +155,7 @@ func main() {
 				if duration > retainTime {
 					mqttGauge.DeleteLabelValues(topic)
 					delete(topicLastHandled, topic)
-					log.Infof("Deleted old topic %s", topic)
+					log.Printf("Deleted old topic %s", topic)
 				}
 			}
 			topicLastHandledMutex.Unlock()
@@ -158,9 +171,14 @@ func main() {
 		`))
 	})
 
-	log.Infoln("Listening on", *listenAddress)
+	log.Printf("Listening on %s", *listenAddress)
 	err = http.ListenAndServe(*listenAddress, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// parseMQTTUri parses mqtt[s]://user:pass@host:port 形式のURIを返す
+func parseMQTTUri(raw string) (*url.URL, error) {
+	return url.Parse(raw)
 }

@@ -32,3 +32,80 @@ mqtt_exporter_build_info{branch="",goversion="go1.10.3",revision="",version=""} 
 mqtt_topic{topic="/home/sensor/co2"} 462
 mqtt_topic{topic="/home/sensor/temp"} 31.171875
 ```
+
+## Development with Dev Container
+
+This repository supports [VS Code Dev Containers](https://code.visualstudio.com/docs/devcontainers/containers).
+
+### How to start the Dev Container
+1. Open this repository in VS Code.
+2. Open the command palette (`F1` or `Ctrl+Shift+P`) and select `Dev Containers: Reopen in Container`.
+
+This will automatically build and start the development container environment.
+
+---
+
+## Build Instructions
+
+```sh
+make build
+```
+Or
+```sh
+go build -o mqtt_topic_exporter main.go
+```
+
+---
+
+## Debugging and Testing
+
+### 1. Start the MQTT broker
+
+```sh
+docker-compose up -d mosquitto
+```
+
+### 2. Run the application
+
+```sh
+make run
+```
+Or
+```sh
+./mqtt_topic_exporter --mqtt.server=mqtt://mosquitto:1883 --mqtt.topic=/test/topic
+```
+
+### 3. Check Prometheus metrics
+
+In another terminal, run:
+
+```sh
+curl -s http://localhost:9981/metrics | grep mqtt
+```
+
+---
+
+## Testing MQTT Publish (publish_test.js)
+
+A sample script `publish_test.js` is included for publishing test messages to the MQTT broker.
+
+### Usage
+
+1. Install dependencies (if not already):
+   ```sh
+   npm install mqtt
+   ```
+2. Run the script:
+   ```sh
+   node publish_test.js
+   ```
+
+This will publish test messages to the MQTT broker at `mqtt://mosquitto:1883`.
+
+You can modify the script to change topics, payloads, or broker address as needed.
+
+---
+
+### Notes
+- The MQTT broker configuration file is located at `.devcontainer/mosquitto.conf`.
+- From inside the Dev Container, you can connect to the broker using `mqtt://mosquitto:1883`.

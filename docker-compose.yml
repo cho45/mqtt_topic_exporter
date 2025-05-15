@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: test-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - .devcontainer/mosquitto.conf:/mosquitto/config/mosquitto.conf
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    tty: true
+    depends_on:
+      - mosquitto
