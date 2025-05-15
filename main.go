@@ -48,22 +48,7 @@ var (
 	Version = "dev"
 )
 
-func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath, retainTimeStr, mqttServerUri string, mqttTopics []string, maxBackoffSec int) {
-	// parse retain time
-	retainTime, err := time.ParseDuration(retainTimeStr)
-	if err != nil {
-		log.Fatalf("specified %s is invalid", retainTimeStr)
-	}
-
-	// parse uri
-	var tlsConfig *tls.Config
-	uri, err := parseMQTTUri(mqttServerUri)
-	if err != nil {
-		log.Fatalf("invalid mqtt.server uri: %v", err)
-	}
-	if uri.Scheme == "mqtts" {
-		tlsConfig = &tls.Config{}
-	}
+func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, retainTime time.Duration, uri *url.URL, tlsConfig *tls.Config, mqttTopics []string, maxBackoffSec int) {
 	username := uri.User.Username()
 	password, _ := uri.User.Password()
 
@@ -97,7 +82,7 @@ func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath, retainTi
 			maxBackoff := time.Duration(maxBackoffSec) * time.Second
 
 			for {
-				err = cli.Connect(&client.ConnectOptions{
+				err := cli.Connect(&client.ConnectOptions{
 					Network:   "tcp",
 					TLSConfig: tlsConfig,
 					Address:   uri.Host,
@@ -236,10 +221,24 @@ func main() {
 	log.Printf("Max reconnect backoff: %d seconds", *maxBackoffSec)
 	log.Printf("----------------------")
 
+	retainTime, err := time.ParseDuration(*retainTimeStr)
+	if err != nil {
+		log.Fatalf("specified %s is invalid", *retainTimeStr)
+	}
+
+	uri, err := parseMQTTUri(*mqttServerUri)
+	if err != nil {
+		log.Fatalf("invalid mqtt.server uri: %v", err)
+	}
+	var tlsConfig *tls.Config
+	if uri.Scheme == "mqtts" {
+		tlsConfig = &tls.Config{}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	mqttTopicExporter(ctx, *listenAddress, *metricsPath, *retainTimeStr, *mqttServerUri, topics, *maxBackoffSec)
+	mqttTopicExporter(ctx, *listenAddress, *metricsPath, retainTime, uri, tlsConfig, topics, *maxBackoffSec)
 }
 
 // parseMQTTUri parses mqtt[s]://user:pass@host:port 形式のURIを返す
