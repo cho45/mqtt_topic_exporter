@@ -191,10 +191,6 @@ func runHTTPServer(ctx context.Context, listenAddress, metricsPath string) {
 	log.Printf("Shutdown complete.")
 }
 
-// 旧mqttTopicExporterから分離した2つの関数を呼び出すだけに
-func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, retainTime time.Duration, uri *url.URL, tlsConfig *tls.Config, mqttTopics []string, maxBackoffSec int) {
-}
-
 func main() {
 	var (
 		listenAddress = flag.String("web.listen-address", ":9981", "Address on which to expose metrics and web interface.")
