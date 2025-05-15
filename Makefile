@@ -12,6 +12,9 @@ build:
 run: build
 	./$(APP_NAME) --mqtt.server=mqtt://mosquitto:1883 --mqtt.topic=/test/topic
 
+pub:
+	go run pubtest.go /test/topic 123.45
+
 test-mqtt-server:
 	docker run --rm -v $(PWD)/mosquitto.conf:/mosquitto/config/mosquitto.conf -p 1883:1883 eclipse-mosquitto
 
