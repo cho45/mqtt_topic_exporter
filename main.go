@@ -55,6 +55,8 @@ func runMQTTSubscriber(ctx context.Context, retainTime time.Duration, uri *url.U
 	log.Printf("value retain: %d", retainTime)
 
 	go func() {
+		errChan := make(chan error)
+		defer close(errChan)
 		for {
 			select {
 			case <-ctx.Done():
@@ -63,9 +65,6 @@ func runMQTTSubscriber(ctx context.Context, retainTime time.Duration, uri *url.U
 			default:
 			}
 			log.Printf("Connecting %s with topic %s", uri.String(), strings.Join(mqttTopics, " "))
-
-			errChan := make(chan error)
-			defer close(errChan)
 
 			cli := client.New(&client.Options{
 				ErrorHandler: func(err error) {
@@ -213,7 +212,20 @@ func main() {
 	log.Printf("--- Configuration ---")
 	log.Printf("Listen address: %s", *listenAddress)
 	log.Printf("Metrics path: %s", *metricsPath)
-	log.Printf("MQTT server URI: %s", *mqttServerUri)
+	uri, err := parseMQTTUri(*mqttServerUri)
+	if err != nil {
+		log.Fatalf("invalid mqtt.server uri: %v", err)
+	}
+	maskedUri := *uri
+	if maskedUri.User != nil {
+		user := maskedUri.User.Username()
+		if _, hasPw := maskedUri.User.Password(); hasPw {
+			maskedUri.User = url.UserPassword(user, "...")
+		} else {
+			maskedUri.User = url.User(user)
+		}
+	}
+	log.Printf("MQTT server URI: %s", maskedUri.String())
 	log.Printf("MQTT topics: %s", strings.Join(topics, ", "))
 	log.Printf("Retain time: %s", *retainTimeStr)
 	log.Printf("Max reconnect backoff: %d seconds", *maxBackoffSec)
@@ -224,7 +236,7 @@ func main() {
 		log.Fatalf("specified %s is invalid", *retainTimeStr)
 	}
 
-	uri, err := parseMQTTUri(*mqttServerUri)
+	uri, err = parseMQTTUri(*mqttServerUri)
 	if err != nil {
 		log.Fatalf("invalid mqtt.server uri: %v", err)
 	}

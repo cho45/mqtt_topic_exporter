@@ -39,7 +39,7 @@ func startTarget(ctx context.Context) (*targetProc, func(), error) {
 	log.Printf("[E2E] Using listen address: %s", listenAddr)
 
 	cmd := exec.CommandContext(ctx, "go", "run", "main.go",
-		"--mqtt.server=mqtt://mosquitto:1883",
+		"--mqtt.server=mqtt://user:pass@mosquitto:1883",
 		"--mqtt.topic=/e2e/test/#",
 		fmt.Sprintf("--web.listen-address=%s", listenAddr))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
