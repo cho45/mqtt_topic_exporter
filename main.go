@@ -52,7 +52,7 @@ func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, r
 	username := uri.User.Username()
 	password, _ := uri.User.Password()
 
-	log.Printf("value ratain: %d", retainTime)
+	log.Printf("value retain: %d", retainTime)
 
 	go func() {
 		for {

@@ -20,32 +20,37 @@ import (
 	importedClient "github.com/yosssi/gmq/mqtt/client"
 )
 
-func TestE2EMQTTExporter(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+type targetProc struct {
+	cmd        *exec.Cmd
+	metricsURL string
+	port       int
+}
 
-	log.Println("[E2E] 1. Finding an available port...")
-	ln, err := net.Listen("tcp", ":0")
-	if err != nil {
-		t.Fatalf("failed to find an available port: %v", err)
-	}
+func emptyPort(_ interface{}) int {
+	ln, _ := net.Listen("tcp", ":0")
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
+	return port
+}
+
+func startTarget(ctx context.Context) (*targetProc, func(), error) {
+	port := emptyPort(nil) // tは使わない
 	listenAddr := fmt.Sprintf(":%d", port)
 	log.Printf("[E2E] Using listen address: %s", listenAddr)
 
-	log.Println("[E2E] 2. Starting mqtt_topic_exporter...")
 	cmd := exec.CommandContext(ctx, "go", "run", "main.go",
 		"--mqtt.server=mqtt://mosquitto:1883",
-		"--mqtt.topic=/e2e/test",
+		"--mqtt.topic=/e2e/test/#",
 		fmt.Sprintf("--web.listen-address=%s", listenAddr))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start mqtt_topic_exporter: %v", err)
+		return nil, nil, fmt.Errorf("failed to start mqtt_topic_exporter: %w", err)
 	}
-	t.Cleanup(func() {
+	metricsURL := fmt.Sprintf("http://localhost:%d/metrics", port)
+
+	cleanup := func() {
 		if cmd.Process != nil {
 			log.Println("[E2E] Killing mqtt_topic_exporter process group...")
 			pgid, _ := syscall.Getpgid(cmd.Process.Pid)
@@ -54,9 +59,7 @@ func TestE2EMQTTExporter(t *testing.T) {
 			cmd.Wait()
 			log.Println("[E2E] mqtt_topic_exporter process group exited")
 		}
-	})
-
-	metricsURL := fmt.Sprintf("http://localhost:%d/metrics", port)
+	}
 
 	log.Println("[E2E] 3. Waiting for exporter to be ready...")
 	ready := false
@@ -70,10 +73,15 @@ func TestE2EMQTTExporter(t *testing.T) {
 		time.Sleep(1 * time.Second)
 	}
 	if !ready {
-		t.Fatal("mqtt_topic_exporter did not start in time")
+		cleanup()
+		return nil, nil, fmt.Errorf("mqtt_topic_exporter did not start in time")
 	}
 
-	log.Println("[E2E] 4. Publishing a test message using Go MQTT client...")
+	return &targetProc{cmd: cmd, metricsURL: metricsURL, port: port}, cleanup, nil
+}
+
+func mqttPublish(t *testing.T, topic, value string) {
+	log.Printf("[E2E] Publishing to topic %s with value %s", topic, value)
 	mqttCli := importedClient.New(&importedClient.Options{})
 	defer mqttCli.Terminate()
 	if err := mqttCli.Connect(&importedClient.ConnectOptions{
@@ -84,18 +92,20 @@ func TestE2EMQTTExporter(t *testing.T) {
 		t.Fatalf("failed to connect to MQTT broker for publish: %v", err)
 	}
 	if err := mqttCli.Publish(&importedClient.PublishOptions{
-		TopicName: []byte("/e2e/test"),
-		Message:   []byte("42.5"),
+		TopicName: []byte(topic),
+		Message:   []byte(value),
 		QoS:       0,
 	}); err != nil {
 		t.Fatalf("failed to publish test message: %v", err)
 	}
 	time.Sleep(1 * time.Second) // Wait for the message to be processed
 	mqttCli.Disconnect()
+}
 
-	log.Println("[E2E] 5. Checking metrics...")
-	found := false
-	for i := 0; i < 10; i++ {
+func checkMetrics(t *testing.T, metricsURL, expected string) {
+	log.Printf("[E2E] Checking /metrics for expected output: %s", expected)
+	var lastBody string
+	for i := 0; i < 5; i++ {
 		resp, err := http.Get(metricsURL)
 		if err != nil {
 			time.Sleep(1 * time.Second)
@@ -103,15 +113,36 @@ func TestE2EMQTTExporter(t *testing.T) {
 		}
 		body, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
-		if strings.Contains(string(body), "mqtt_topic{topic=\"/e2e/test\"} 42.5") {
-			found = true
-			break
+		lastBody = string(body)
+		if strings.Contains(lastBody, expected) {
+			return
 		}
 		time.Sleep(1 * time.Second)
 	}
-	if !found {
-		t.Fatal("Expected metric not found in /metrics output")
+	// /metrics のうち mqtt_topic を含む行を抽出
+	var lines []string
+	for _, line := range strings.Split(lastBody, "\n") {
+		if strings.Contains(line, "mqtt_topic") {
+			lines = append(lines, line)
+		}
 	}
+	t.Fatalf("Expected metric not found in /metrics output: %s\n--- mqtt_topic lines ---\n%s", expected, strings.Join(lines, "\n"))
+}
 
-	log.Println("[E2E] 6. E2E test passed")
+func TestE2EMQTTExporter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	target, cleanup, err := startTarget(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+
+	mqttPublish(t, "/e2e/test/0", "42.5")
+	mqttPublish(t, "/e2e/test/1", "52.5")
+	checkMetrics(t, target.metricsURL, `mqtt_topic{topic="/e2e/test/0"} 42.5`)
+	checkMetrics(t, target.metricsURL, `mqtt_topic{topic="/e2e/test/1"} 52.5`)
+	mqttPublish(t, "/e2e/test/0", "100.1")
+	checkMetrics(t, target.metricsURL, `mqtt_topic{topic="/e2e/test/0"} 100.1`)
 }
