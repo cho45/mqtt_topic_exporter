@@ -106,7 +106,9 @@ func main() {
 				ClientID:  []byte("client_id"),
 			})
 			if err != nil {
-				log.Fatal(err)
+				log.Printf("Failed to connect to MQTT broker: %v. Retrying in 3 seconds...", err)
+				time.Sleep(3 * time.Second)
+				continue
 			}
 
 			// Subscribe to topics.
@@ -135,7 +137,9 @@ func main() {
 					},
 				})
 				if err != nil {
-					log.Fatal(err)
+					log.Printf("Failed to subscribe to topic %s: %v. Retrying in 3 seconds...", mqttTopic, err)
+					time.Sleep(3 * time.Second)
+					continue
 				}
 			}
 
