@@ -17,3 +17,6 @@ test-mqtt-server:
 
 clean:
 	rm -f $(APP_NAME)
+
+test:
+	go test -tags=e2e -v e2e_test.go
