@@ -123,7 +123,11 @@ func main() {
 								topicLastHandledMutex.Lock()
 								topicLastHandled[topic] = time.Now()
 								topicLastHandledMutex.Unlock()
-								value, _ := strconv.ParseFloat(string(message), 64)
+								value, err := strconv.ParseFloat(string(message), 64)
+								if err != nil {
+									log.Printf("Failed to parse float from MQTT message on topic %s: %s (error: %v)", topic, string(message), err)
+									return
+								}
 								mqttGauge.WithLabelValues(topic).Set(value)
 								log.Printf("MQTT TOPIC %s => %f", topic, value)
 							},
