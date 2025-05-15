@@ -85,24 +85,20 @@ curl -s http://localhost:9981/metrics | grep mqtt
 
 ---
 
-## Testing MQTT Publish (publish_test.js)
+## Testing MQTT Publish (pubtest.go)
 
-A sample script `publish_test.js` is included for publishing test messages to the MQTT broker.
+A sample Go program `pubtest.go` is included for publishing test messages to the MQTT broker.
 
 ### Usage
 
-1. Install dependencies (if not already):
-   ```sh
-   npm install mqtt
-   ```
-2. Run the script:
-   ```sh
-   node publish_test.js
-   ```
+Run the publisher directly with `go run`:
+```sh
+ go run pubtest.go --topic /test/topic --value 42.5
+```
 
-This will publish test messages to the MQTT broker at `mqtt://mosquitto:1883`.
+This will publish a test message to the MQTT broker at `mqtt://mosquitto:1883`.
 
-You can modify the script to change topics, payloads, or broker address as needed.
+You can modify the command line arguments to change topics, payloads, or broker address as needed.
 
 ---
 
