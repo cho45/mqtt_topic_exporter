@@ -98,6 +98,10 @@ func main() {
 			})
 			defer cli.Terminate()
 
+			// Generate unique ClientID: mqtt_topic_exporter + random 8 hex digits
+			clientID := fmt.Sprintf("mqtt_topic_exporter_%08x", time.Now().UnixNano()&0xffffffff)
+			log.Printf("Using ClientID: %s", clientID)
+
 			backoff := 1 * time.Second
 			maxBackoff := time.Duration(*maxBackoffSec) * time.Second
 
@@ -108,7 +112,7 @@ func main() {
 					Address:   uri.Host,
 					UserName:  []byte(username),
 					Password:  []byte(password),
-					ClientID:  []byte("client_id"),
+					ClientID:  []byte(clientID),
 				})
 				if err != nil {
 					log.Printf("Failed to connect to MQTT broker: %v. Retrying in %v...", err, backoff)
