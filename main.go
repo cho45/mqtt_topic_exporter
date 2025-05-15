@@ -12,7 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors/version"
@@ -44,43 +48,16 @@ var (
 	Version = "dev"
 )
 
-func main() {
-	var (
-		listenAddress = flag.String("web.listen-address", ":9981", "Address on which to expose metrics and web interface.")
-		metricsPath   = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
-		retainTimeStr = flag.String("mqtt.retain-time", "1m", "Retain duration for a topic")
-		mqttServerUri = flag.String("mqtt.server", "", "MQTT Server address URI mqtts://user:pass@host:port")
-		mqttTopics    = flag.String("mqtt.topic", "", "Comma separated MQTT topics to watch")
-		maxBackoffSec = flag.Int("mqtt.max-backoff", 60, "Maximum backoff duration for MQTT reconnect attempts (seconds)")
-	)
-	flag.Parse()
-
-	if *mqttServerUri == "" || *mqttTopics == "" {
-		log.Fatal("--mqtt.server and --mqtt.topic are required")
-	}
-
-	topics := strings.Split(*mqttTopics, ",")
-
-	log.Printf("Starting mqtt_topic_exporter version=%s", Version)
-	log.Printf("Build context")
-	log.Printf("--- Configuration ---")
-	log.Printf("Listen address: %s", *listenAddress)
-	log.Printf("Metrics path: %s", *metricsPath)
-	log.Printf("MQTT server URI: %s", *mqttServerUri)
-	log.Printf("MQTT topics: %s", strings.Join(topics, ", "))
-	log.Printf("Retain time: %s", *retainTimeStr)
-	log.Printf("Max reconnect backoff: %d seconds", *maxBackoffSec)
-	log.Printf("----------------------")
-
+func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath, retainTimeStr, mqttServerUri string, mqttTopics []string, maxBackoffSec int) {
 	// parse retain time
-	retainTime, err := time.ParseDuration(*retainTimeStr)
+	retainTime, err := time.ParseDuration(retainTimeStr)
 	if err != nil {
-		log.Fatalf("specified %s is invalid", *retainTimeStr)
+		log.Fatalf("specified %s is invalid", retainTimeStr)
 	}
 
 	// parse uri
 	var tlsConfig *tls.Config
-	uri, err := parseMQTTUri(*mqttServerUri)
+	uri, err := parseMQTTUri(mqttServerUri)
 	if err != nil {
 		log.Fatalf("invalid mqtt.server uri: %v", err)
 	}
@@ -94,7 +71,13 @@ func main() {
 
 	go func() {
 		for {
-			log.Printf("Connecting %s with topic %s", uri.String(), strings.Join(topics, " "))
+			select {
+			case <-ctx.Done():
+				log.Printf("MQTT loop exiting due to shutdown signal.")
+				return
+			default:
+			}
+			log.Printf("Connecting %s with topic %s", uri.String(), strings.Join(mqttTopics, " "))
 
 			errChan := make(chan error)
 			defer close(errChan)
@@ -111,7 +94,7 @@ func main() {
 			log.Printf("Using ClientID: %s", clientID)
 
 			backoff := 1 * time.Second
-			maxBackoff := time.Duration(*maxBackoffSec) * time.Second
+			maxBackoff := time.Duration(maxBackoffSec) * time.Second
 
 			for {
 				err = cli.Connect(&client.ConnectOptions{
@@ -135,7 +118,7 @@ func main() {
 			}
 
 			// Subscribe to topics.
-			for _, mqttTopic := range topics {
+			for _, mqttTopic := range mqttTopics {
 				log.Printf("Subscribe topic %s", mqttTopic)
 				err := cli.Subscribe(&client.SubscribeOptions{
 					SubReqs: []*client.SubReq{
@@ -143,7 +126,6 @@ func main() {
 							TopicFilter: []byte(mqttTopic),
 							QoS:         mqtt.QoS0,
 							Handler: func(topicName, message []byte) {
-								// mqtt_topic{topic="/foo/bar"} value
 								topic := string(topicName)
 								topicLastHandledMutex.Lock()
 								topicLastHandled[topic] = time.Now()
@@ -179,8 +161,13 @@ func main() {
 	}()
 
 	go func() {
-		// Cleanup
 		for {
+			select {
+			case <-ctx.Done():
+				log.Printf("Cleanup loop exiting due to shutdown signal.")
+				return
+			default:
+			}
 			time.Sleep(10 * time.Second)
 			now := time.Now()
 			topicLastHandledMutex.Lock()
@@ -196,20 +183,63 @@ func main() {
 		}
 	}()
 
-	http.Handle(*metricsPath, promhttp.Handler())
+	httpServer := &http.Server{Addr: listenAddress}
+	http.Handle(metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<!DOCTYPE html>
 		<title>MQTT Exporter</title>
 		<h1>MQTT Exporter</h1>
-		<p><a href="` + *metricsPath + `">Metrics</a>
+		<p><a href="` + metricsPath + `">Metrics</a>
 		`))
 	})
 
-	log.Printf("Listening on %s", *listenAddress)
-	err = http.ListenAndServe(*listenAddress, nil)
-	if err != nil {
-		log.Fatal(err)
+	go func() {
+		log.Printf("Listening on %s", listenAddress)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Printf("Shutting down HTTP server...")
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	httpServer.Shutdown(ctxTimeout)
+	log.Printf("Shutdown complete.")
+}
+
+func main() {
+	var (
+		listenAddress = flag.String("web.listen-address", ":9981", "Address on which to expose metrics and web interface.")
+		metricsPath   = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+		retainTimeStr = flag.String("mqtt.retain-time", "1m", "Retain duration for a topic")
+		mqttServerUri = flag.String("mqtt.server", "", "MQTT Server address URI mqtts://user:pass@host:port")
+		mqttTopics    = flag.String("mqtt.topic", "", "Comma separated MQTT topics to watch")
+		maxBackoffSec = flag.Int("mqtt.max-backoff", 60, "Maximum backoff duration for MQTT reconnect attempts (seconds)")
+	)
+	flag.Parse()
+
+	if *mqttServerUri == "" || *mqttTopics == "" {
+		log.Fatal("--mqtt.server and --mqtt.topic are required")
 	}
+
+	topics := strings.Split(*mqttTopics, ",")
+
+	log.Printf("Starting mqtt_topic_exporter version=%s", Version)
+	log.Printf("Build context")
+	log.Printf("--- Configuration ---")
+	log.Printf("Listen address: %s", *listenAddress)
+	log.Printf("Metrics path: %s", *metricsPath)
+	log.Printf("MQTT server URI: %s", *mqttServerUri)
+	log.Printf("MQTT topics: %s", strings.Join(topics, ", "))
+	log.Printf("Retain time: %s", *retainTimeStr)
+	log.Printf("Max reconnect backoff: %d seconds", *maxBackoffSec)
+	log.Printf("----------------------")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	mqttTopicExporter(ctx, *listenAddress, *metricsPath, *retainTimeStr, *mqttServerUri, topics, *maxBackoffSec)
 }
 
 // parseMQTTUri parses mqtt[s]://user:pass@host:port 形式のURIを返す

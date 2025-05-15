@@ -4,7 +4,7 @@ const mqtt = require('mqtt');
 
 const broker = 'mqtt://localhost:1883';
 const topic = '/test/topic';
-const value = 123.45;
+const value = ~~(Math.random() * 1000);
 
 const client = mqtt.connect(broker);
 
