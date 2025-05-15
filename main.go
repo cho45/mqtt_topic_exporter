@@ -48,7 +48,7 @@ var (
 	Version = "dev"
 )
 
-func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, retainTime time.Duration, uri *url.URL, tlsConfig *tls.Config, mqttTopics []string, maxBackoffSec int) {
+func runMQTTSubscriber(ctx context.Context, retainTime time.Duration, uri *url.URL, tlsConfig *tls.Config, mqttTopics []string, maxBackoffSec int) {
 	username := uri.User.Username()
 	password, _ := uri.User.Password()
 
@@ -74,7 +74,6 @@ func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, r
 			})
 			defer cli.Terminate()
 
-			// Generate unique ClientID: mqtt_topic_exporter + random 8 hex digits
 			clientID := fmt.Sprintf("mqtt_topic_exporter_%08x", time.Now().UnixNano()&0xffffffff)
 			log.Printf("Using ClientID: %s", clientID)
 
@@ -99,10 +98,9 @@ func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, r
 					}
 					continue
 				}
-				break // 成功したら抜ける
+				break
 			}
 
-			// Subscribe to topics.
 			for _, mqttTopic := range mqttTopics {
 				log.Printf("Subscribe topic %s", mqttTopic)
 				err := cli.Subscribe(&client.SubscribeOptions{
@@ -137,10 +135,7 @@ func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, r
 			log.Printf("MQTT Client disconnected %v", disconnected)
 
 			cli.Terminate()
-
-			// 再接続時は指数バックオフをリセット
 			backoff = 1 * time.Second
-
 			time.Sleep(1 * time.Second)
 		}
 	}()
@@ -167,7 +162,10 @@ func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, r
 			topicLastHandledMutex.Unlock()
 		}
 	}()
+}
 
+// HTTPサーバー起動処理を分離
+func runHTTPServer(ctx context.Context, listenAddress, metricsPath string) {
 	httpServer := &http.Server{Addr: listenAddress}
 	http.Handle(metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -191,6 +189,10 @@ func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, r
 	defer cancel()
 	httpServer.Shutdown(ctxTimeout)
 	log.Printf("Shutdown complete.")
+}
+
+// 旧mqttTopicExporterから分離した2つの関数を呼び出すだけに
+func mqttTopicExporter(ctx context.Context, listenAddress, metricsPath string, retainTime time.Duration, uri *url.URL, tlsConfig *tls.Config, mqttTopics []string, maxBackoffSec int) {
 }
 
 func main() {
@@ -238,7 +240,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	mqttTopicExporter(ctx, *listenAddress, *metricsPath, retainTime, uri, tlsConfig, topics, *maxBackoffSec)
+	runMQTTSubscriber(ctx, retainTime, uri, tlsConfig, topics, *maxBackoffSec)
+	runHTTPServer(ctx, *listenAddress, *metricsPath)
 }
 
 // parseMQTTUri parses mqtt[s]://user:pass@host:port 形式のURIを返す
